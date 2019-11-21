@@ -7,6 +7,8 @@ use ggez::graphics::{Color, Rect};
 use num_enum::TryFromPrimitive;
 use rand::Rng;
 use std::convert::TryFrom;
+use std::time::{Instant, Duration};
+use std::process::exit;
 
 fn main() {
     // Make a Context and an EventLoop.
@@ -92,23 +94,25 @@ struct Piece {
     position: (f32, f32), // relative to origin
     state: usize,
     color: Color,
+    environment: Grid,
 }
 
 impl Piece {
     pub fn new() -> Piece {
         let t: Tetrimonos =
-            match Tetrimonos::try_from(rand::thread_rng().gen_range(0, 3)) {
+            match Tetrimonos::try_from(rand::thread_rng().gen_range(0, 7)) {
                 Ok(tetrimonos) => tetrimonos,
                 Err(_) => Tetrimonos::BLANK
             };
-        println!("Spawned tetrimono of type {:?}", &t);
         let p = Piece {
             positions: Piece::generate_positions(&t),
             // The position is always second row, fourth column
             position: (2.0, GRID_SIZE.1 as f32 / 2.0),
+            // represents the state of rotation
             state: 0,
             color: t.generate_color(),
             tetrimono: t,
+            environment: Grid::new(),
         };
         return p;
     }
@@ -136,56 +140,89 @@ impl Piece {
                     [(-1.0, -2.0), (-1.0, -1.0), (0.0, -1.0), (-1.0, 0.0)],
                     [(-1.0, -2.0), (-2.0, -1.0), (-1.0, -1.0), (0.0, -1.0)],
                 ],
-//            Tetrimonos::T => [(0,0),(1,0),(1,1),(2,0)],
-//            Tetrimonos::S => [(0,0),(1,0),(1,1),(2,1)],
-//            Tetrimonos::Z => [(0,1),(1,1),(1,0),(2,0)],
-//            Tetrimonos::J => [(0,0),(0,1),(1,0),(2,0)],
-//            Tetrimonos::L => [(0,0),(1,0),(2,0),(2,1)],
-            _ => [
-                [(0.0,0.0), (0.0,0.0), (0.0,0.0), (0.0,0.0)],
-                [(0.0,0.0), (0.0,0.0), (0.0,0.0), (0.0,0.0)],
-                [(0.0,0.0), (0.0,0.0), (0.0,0.0), (0.0,0.0)],
-                [(0.0,0.0), (0.0,0.0), (0.0,0.0), (0.0,0.0)],
-                ]
+            Tetrimonos::S =>
+                [
+                    [(-1.0, -2.0), (-1.0, -1.0), (-2.0, -1.0), (-2.0, 0.0)],
+                    [(-2.0, -1.0), (-1.0, -1.0), (-1.0, 0.0), (0.0, 0.0)],
+                    [(0.0, -2.0), (0.0, -1.0), (-1.0, -1.0), (-1.0, 0.0)],
+                    [(-2.0, -2.0), (-1.0, -2.0), (-1.0, -1.0), (0.0, -1.0)],
+                ],
+            Tetrimonos::Z =>
+                [
+                    [(-2.0, -2.0), (-2.0, -1.0), (-1.0, -1.0), (-1.0, 0.0)],
+                    [(0.0, -1.0), (-1.0, -1.0), (-1.0, 0.0), (-2.0, 0.0)],
+                    [(-1.0, -2.0), (-1.0, -1.0), (0.0, -1.0), (0.0, 0.0)],
+                    [(0.0, -2.0), (-1.0, -2.0), (-1.0, -1.0), (-2.0, -1.0)],
+                ],
+            Tetrimonos::J =>
+                [
+                    [(-2.0, -2.0), (-1.0, -2.0), (-1.0, -1.0), (-1.0, 0.0)],
+                    [(0.0, -1.0), (-1.0, -1.0), (-2.0, -1.0), (-2.0, 0.0)],
+                    [(-1.0, -2.0), (-1.0, -1.0), (-1.0, 0.0), (0.0, 0.0)],
+                    [(0.0, -2.0), (0.0, -1.0), (-1.0, -1.0), (-2.0, -1.0)],
+                ],
+            Tetrimonos::L =>
+                [
+                    [(-1.0, -2.0), (-1.0, -1.0), (-1.0, 0.0), (-2.0, 0.0)],
+                    [(-2.0, -1.0), (-1.0, -1.0), (0.0, -1.0), (0.0, 0.0)],
+                    [(0.0, -2.0), (-1.0, -2.0), (-1.0, -1.0), (-1.0, 0.0)],
+                    [(-2.0, -2.0), (-2.0, -1.0), (-1.0, -1.0), (0.0, -1.0)],
+                ],
+            Tetrimonos::BLANK =>
+                [
+                    [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
+                    [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
+                    [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
+                    [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)],
+                ],
         }
     }
 
-    fn collides_with_environment(&self) -> bool {
-        let (_, x) = self.position;
-        let mut y: f32 = GRID_SIZE.0 as f32;
+    fn collides_with_environment(&self, x: f32, y: f32, state: usize) -> bool {
         let real_positions =
-            self.positions[self.state].iter().map(|(i, j)| (i+y, j+x));
+            self.positions[state].iter().map(|(i, j)| (i+y, j+x));
         for (i,j) in real_positions {
-            if i < 0.0 || i >= GRID_SIZE.0 as f32 || j < 0.0 || j >= GRID_SIZE.1 as f32 {
-                return false;
+            if i < 0.0 || i >= GRID_SIZE.0 as f32 || j < 0.0 || j >= GRID_SIZE.1 as f32 ||
+                self.environment.grid[i as usize][j as usize] != Tetrimonos::BLANK
+            {
+                return true;
             }
         }
-        true
+        false
+    }
+
+    fn calculate_fall_position(&self) -> (f32, f32) {
+        let (y0, x) = self.position;
+        let mut y: f32 = y0;
+        while !self.collides_with_environment(x, y, self.state) {
+            y+=1.0;
+        }
+        y-=1.0;
+        (y, x)
+    }
+
+    // Copy the state of the grid upon update. Inefficient but prevents race conditions
+    fn update_environment(&mut self, environment: &Grid) {
+        let new_env = environment.clone();
+        if self.environment != new_env {
+            self.environment = new_env;
+        }
     }
 
     fn rotate(&mut self) {
-        let previous_state = self.state;
         let prospective_state = (self.state+1)%4;
-        let (left, right) = self.width(prospective_state);
-        let (_, x) = self.position;
-        if x < -left || x+right > (GRID_SIZE.1 as f32) - 1.0 {
-            return ();
+        let (y, x) = self.position;
+        if !self.collides_with_environment(x,y, prospective_state) {
+            self.state = prospective_state;
         }
-        self.state = prospective_state;
+
     }
 
-    fn shift(&mut self, dir: f32) {
-        let (left, right) = self.width(self.state);
-        match self.position {
-            (y, x) if x > -left && dir == -1.0 || x+right < (GRID_SIZE.1 as f32) - 1.0 && dir == 1.0
-
-                => self.position = (y, x+dir),
-            _ => ()
+    fn shift(&mut self, dir: (f32, f32)) {
+        let (y, x) = self.position;
+        if !self.collides_with_environment(x+dir.1, y+dir.0, self.state) {
+            self.position = (y+dir.0, x+dir.1);
         }
-    }
-
-    fn width(&self, state: usize) -> (f32,f32) {
-        (self.positions[state][0].1, self.positions[state][3].1)
     }
 
     fn draw(&mut self, ctx: &mut Context) -> GameResult<()> {
@@ -224,15 +261,11 @@ impl Piece {
         Ok(())
     }
 
-    fn calculate_fall_position(&self) -> (f32, f32) {
-        let (_, x) = self.position;
-        let mut y: f32 = GRID_SIZE.0 as f32;
-        let valid = false;
-        (y, x)
-    }
+
 
 }
 
+#[derive(Clone, Copy, PartialEq)]
 struct Grid {
     grid: [[Tetrimonos; GRID_SIZE.1]; GRID_SIZE.0],
 }
@@ -259,7 +292,7 @@ impl Grid {
                     else {graphics::DrawMode::fill()};
                 let rect = graphics::Mesh::new_rectangle(
                     ctx,
-                     draw_mode,
+                    draw_mode,
                     dims,
                     self.grid[i][j].generate_color()
                 )?;
@@ -274,16 +307,19 @@ struct Tetris {
     // Your state here...
     score: i32,
     grid: Grid,
-    piece: Piece
+    piece: Piece,
+    last_tick: Instant,
 }
 
 impl Tetris {
     pub fn new(_ctx: &mut Context) -> Tetris {
         // Load/create resources here: images, fonts, sounds, etc.
+        let grid = Grid::new();
         Tetris {
             score: 0,
             grid: Grid::new(),
-            piece: Piece::new()
+            piece: Piece::new(),
+            last_tick: Instant::now(),
         }
     }
 
@@ -304,6 +340,21 @@ impl Tetris {
 impl EventHandler for Tetris {
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
         // Update code here...
+        self.piece.update_environment(&self.grid);
+        if Instant::now() - self.last_tick >= Duration::from_millis(500) {
+            if self.piece.position == self.piece.calculate_fall_position() {
+                // We need to either assimilate the positions or the game is over
+                let (y, x) = self.piece.calculate_fall_position();
+                if self.piece.collides_with_environment(x, y, self.piece.state) {
+                    // You lose
+                    exit(0);
+                }
+                self.assimilate_piece();
+            } else {
+                self.piece.shift((1.0, 0.0));
+            }
+            self.last_tick = Instant::now();
+        }
         return Ok(());
     }
 
@@ -324,10 +375,10 @@ impl EventHandler for Tetris {
     ) {
         match keycode {
             KeyCode::A => self.piece = Piece::new(),
-            KeyCode::Left => self.piece.shift(-1.0),
-            KeyCode::Right => self.piece.shift(1.0),
+            KeyCode::Left => self.piece.shift((0.0, -1.0)),
+            KeyCode::Right => self.piece.shift((0.0, 1.0)),
             KeyCode::Up => self.piece.rotate(),
-            KeyCode::Down => self.assimilate_piece(),
+            KeyCode::Down => self.piece.shift((1.0, 0.0)),
             _ => ()
         }
     }
