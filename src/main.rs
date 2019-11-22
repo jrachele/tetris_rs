@@ -2,7 +2,7 @@ use ggez::{Context, ContextBuilder, GameResult};
 use ggez::event::{KeyCode, KeyMods};
 use ggez::event::{self, EventHandler};
 use ggez::graphics;
-use ggez::graphics::{Color, Rect};
+use ggez::graphics::{Color, Rect, Drawable};
 
 use num_enum::TryFromPrimitive;
 use rand::Rng;
@@ -15,7 +15,7 @@ fn main() {
     let (mut ctx, mut event_loop) =
         ContextBuilder::new("Tetris", "Julian Rachele")
             .window_setup(ggez::conf::WindowSetup::default().title("tetris.rs"))
-            .window_mode(ggez::conf::WindowMode::default().dimensions(320.0,640.0))
+            .window_mode(ggez::conf::WindowMode::default().dimensions(640.0,640.0))
             .build()
             .unwrap();
 
@@ -33,6 +33,7 @@ fn main() {
 
 const GRID_SIZE: (usize, usize) = (20, 10);
 const UNIT: f32 = 32.0;
+const FPS: u8 = 60;
 
 enum Colors {
     CYAN,
@@ -240,6 +241,7 @@ impl Piece {
             )?;
             graphics::draw(ctx, &rect, (ggez::mint::Point2 { x: 0.0, y: 0.0 },))?;
 
+
             // Draw the phantom fall position
             let (fall_y, fall_x) = self.shadow_position;
             let fall_dims = Rect {
@@ -250,7 +252,7 @@ impl Piece {
             };
             let fall_rect = graphics::Mesh::new_rectangle(
                 ctx,
-                graphics::DrawMode::stroke(5.0),
+                graphics::DrawMode::stroke(4.0),
                 fall_dims,
                 self.color
             )?;
@@ -307,7 +309,7 @@ impl Grid {
             .filter(|x| x.into_iter().any(|y| *y==Tetrimonos::BLANK))
             .collect();
         let num_removed = GRID_SIZE.0 - new_grid.len();
-        for i in 0..num_removed {
+        for _ in 0..num_removed {
             new_grid.insert(0, vec![Tetrimonos::BLANK; GRID_SIZE.1]);
         }
         self.grid = new_grid;
@@ -315,10 +317,46 @@ impl Grid {
     }
 }
 
+struct Level {
+    number: i32,
+    color: Color
+}
+
+impl Level {
+    fn new() -> Level {
+        Level {
+            number: 1,
+            color: graphics::BLACK
+        }
+    }
+
+    fn get_speed(&self) -> u64 {
+        // Gets the milliseconds between each single-grid drop
+        match self.number {
+            1 => 750,
+            2 => 670,
+            3 => 590,
+            4 => 520,
+            5 => 440,
+            6 => 360,
+            7 => 280,
+            8 => 200,
+            9 => 125,
+            10 => 90,
+            11 | 12 | 13 => 80,
+            14 | 15 | 16 => 60,
+            17 | 18 | 19 => 45,
+            20..=30 => 30,
+            _ => 20
+        }
+    }
+}
+
 struct Tetris {
     // Your state here...
     score: i32,
-    speed: u64,
+    total_lines: i32,
+    level: Level,
     piece: Piece,
     last_tick: Instant,
     last_tetris: bool,
@@ -329,7 +367,8 @@ impl Tetris {
         // Load/create resources here: images, fonts, sounds, etc.
         Tetris {
             score: 0,
-            speed: 500,
+            total_lines: 0,
+            level: Level::new(),
             piece: Piece::new(Grid::new()),
             last_tick: Instant::now(),
             last_tetris: false,
@@ -341,7 +380,6 @@ impl Tetris {
         let (y, x) = self.piece.shadow_position;
         let mut grid = self.piece.environment.clone();
         for i in 0..4 {
-            let t = y as usize;
             let j = (y + (self.piece.positions[self.piece.state][i].0)) as usize;
             let k = (x + (self.piece.positions[self.piece.state][i].1)) as usize;
             grid.grid[j][k] = self.piece.tetrimono;
@@ -351,12 +389,28 @@ impl Tetris {
         return rows_removed;
     }
 
+    fn draw_hud(&mut self, ctx: &mut Context) -> GameResult {
+        let font = graphics::Font::default();
+        let score_display = format!("Score:\n{}", self.score);
+        let mut score_text = graphics::Text::new(score_display);
+        score_text.set_font(font, graphics::Scale::uniform(32.0));
+        score_text.set_bounds(ggez::mint::Point2 {x: 160.0, y: 160.0}, graphics::Align::Center);
+        graphics::draw(ctx, &score_text, ggez::graphics::DrawParam::new()
+            .dest(ggez::mint::Point2 {x: 400.0, y: 80.0}).color(graphics::WHITE))?;
+        let level_display = format!("Level:\n{}", self.level.number);
+        let mut level_text = graphics::Text::new(level_display);
+        level_text.set_font(font, graphics::Scale::uniform(32.0));
+        level_text.set_bounds(ggez::mint::Point2 {x: 160.0, y: 160.0}, graphics::Align::Center);
+        graphics::draw(ctx, &level_text, ggez::graphics::DrawParam::new()
+            .dest(ggez::mint::Point2 {x: 400.0, y: 160.0}).color(graphics::WHITE))?;
+        Ok(())
+    }
 }
 
 impl EventHandler for Tetris {
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
         // Update code here...
-        if Instant::now() - self.last_tick >= Duration::from_millis(self.speed) {
+        if Instant::now() - self.last_tick >= Duration::from_millis(self.level.get_speed()) {
             if self.piece.position == self.piece.shadow_position {
                 // We need to either assimilate the positions or the game is over
                 let (y, x) = self.piece.shadow_position;
@@ -367,19 +421,20 @@ impl EventHandler for Tetris {
                 let rows_reduced = self.assimilate_piece();
                 if rows_reduced > 0 {
                     if rows_reduced == 4 && self.last_tetris {
-                        self.score += 1200;
+                        self.score += 1200 * self.level.number;
                         self.last_tetris = true;
                     }
                     else if rows_reduced == 4 {
-                        self.score += 800;
+                        self.score += 800 * self.level.number;
                         self.last_tetris = true;
                     }
                     else {
-                        self.score += 100 * rows_reduced as i32;
+                        self.score += 100 * self.level.number * rows_reduced as i32;
                         self.last_tetris = false;
                     }
                 }
-                println!("The score is: {}", self.score);
+                self.total_lines += rows_reduced as i32;
+                self.level.number = (self.total_lines / 10) + 1;
             } else {
                 self.piece.shift((1.0, 0.0));
             }
@@ -392,7 +447,9 @@ impl EventHandler for Tetris {
         graphics::clear(ctx, graphics::BLACK);
         self.piece.environment.draw(ctx)?;
         self.piece.draw(ctx)?;
+        self.draw_hud(ctx)?;
         graphics::present(ctx)?;
+        ggez::timer::yield_now();
         Ok(())
     }
 
@@ -408,6 +465,7 @@ impl EventHandler for Tetris {
             KeyCode::Right => self.piece.shift((0.0, 1.0)),
             KeyCode::Up => self.piece.rotate(),
             KeyCode::Down => self.piece.shift((1.0, 0.0)),
+            KeyCode::Escape => exit(0),
             _ => ()
         }
     }
